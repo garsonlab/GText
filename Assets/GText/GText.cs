@@ -125,6 +125,9 @@ public class GText : Text, IPointerClickHandler
                     int dot = 0;//repair next line distance
                     for (int j = info.len - 1; j > 0; j--)
                     {
+                        if (i + j * 4 + 3 >= verts.Count)//Fixed [AB] tag length is 4 but verts count is 12
+                            continue;
+
                         if (verts[i + j * 4 + 3].position.y >= verts[i + 3].position.y)
                         {
                             repairDistance += verts[i + j * 4 + 1].position.x - m_TempVerts[2].position.x;
