@@ -25,9 +25,42 @@ public class GText : Text, IPointerClickHandler
     Dictionary<int, SpriteInfo> emojis = new Dictionary<int, SpriteInfo>();
     List<HrefInfo> hrefs = new List<HrefInfo>();
     readonly UIVertex[] m_TempVerts = new UIVertex[4];
+    string m_outputText = "";
 
     public delegate void HrefClickHandler(string arg);
     private event HrefClickHandler m_OnHrefClick = null;//can use toLua directly, so not UnityEvent.
+    #endregion
+
+    #region Accerssor
+    public override float preferredWidth
+    {
+        get
+        {
+            var settings = GetGenerationSettings(Vector2.zero);
+            return cachedTextGeneratorForLayout.GetPreferredWidth(m_outputText, settings) / pixelsPerUnit;
+        }
+    }
+    public override float preferredHeight
+    {
+        get
+        {
+            var settings = GetGenerationSettings(new Vector2(rectTransform.rect.size.x, 0.0f));
+            return cachedTextGeneratorForLayout.GetPreferredHeight(m_outputText, settings) / pixelsPerUnit;
+        }
+    }
+
+    public override string text
+    {
+        get { return m_Text; }
+        set
+        {
+            m_Text = value;
+            if(emojis == null)
+                LoadEmojiData();
+            ParseTextTag(value);
+        }
+    }
+
     #endregion
 
     #region Private
@@ -50,7 +83,7 @@ public class GText : Text, IPointerClickHandler
         Vector2 extents = rectTransform.rect.size;
 
         var settings = GetGenerationSettings(extents);
-        cachedTextGenerator.Populate(text, settings);
+        cachedTextGenerator.Populate(m_outputText, settings);
 
         Rect inputRect = rectTransform.rect;
 
@@ -270,6 +303,7 @@ public class GText : Text, IPointerClickHandler
         }
         stringBuilder.Append(inputText.Substring(indexText, inputText.Length - indexText));
         hrefBuilder.Append(inputText.Substring(indexText, inputText.Length - indexText));
+        
         return hrefBuilder.ToString();
     }
 
@@ -283,6 +317,9 @@ public class GText : Text, IPointerClickHandler
         emojis.Clear();
 
         MatchCollection matchs = Regex.Matches(inputText, "\\[[a-z0-9A-Z]+\\]");
+
+        #region Fixed Bug Tag 's Length More Then 3 Can't Get Right Width or Height
+        /*
         for (int i = 0; i < matchs.Count; i++)
         {
             var match = matchs[i];
@@ -295,6 +332,45 @@ public class GText : Text, IPointerClickHandler
         }
 
         matchs = Regex.Matches(inputText, @"<material=([^>]*)>(.+?)</material>");
+        for (int i = 0; i < matchs.Count; i++)
+        {
+            var match = matchs[i];
+            var hrefInfo = new HrefInfo
+            {
+                startIndex = match.Index * 4, // hyperLink vecs start index
+                endIndex = match.Index * 4 + (match.Length - 1) * 4 + 3,
+                url = match.Groups[1].Value
+            };
+            hrefs.Add(hrefInfo);
+        }
+        */
+        #endregion
+
+        if (matchs.Count > 0)
+        {
+            StringBuilder builder = new StringBuilder();
+            int textIndex = 0;
+            for (int i = 0; i < matchs.Count; i++)
+            {
+                var match = matchs[i];
+                SpriteInfo info;
+                if (EmojiIndex.TryGetValue(match.Value, out info))
+                {
+                    builder.Append(inputText.Substring(textIndex, match.Index - textIndex));
+                    int temIndex = builder.Length;
+                    builder.Append("[$]");
+                    info.len = 3;
+                    emojis.Add(temIndex, info);
+                    textIndex = match.Index + match.Length;
+                }
+            }
+            builder.Append(inputText.Substring(textIndex, inputText.Length - textIndex));
+            m_outputText = builder.ToString();
+        }
+        else
+            m_outputText = inputText;
+
+        matchs = Regex.Matches(m_outputText, @"<material=([^>]*)>(.+?)</material>");
         for (int i = 0; i < matchs.Count; i++)
         {
             var match = matchs[i];
