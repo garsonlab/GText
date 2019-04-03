@@ -147,11 +147,13 @@ public class GTextBuilder
 
         Selection.activeGameObject = obj;
 
+	/*
         Canvas[] canvas = rect.GetComponentsInParent<Canvas>();
         foreach (var cv in canvas)
         {
             cv.additionalShaderChannels |= AdditionalCanvasShaderChannels.TexCoord1;
         }
+	*/
     }
 
     static int ComputeAtlasSize(int count, ref int size, ref int x)

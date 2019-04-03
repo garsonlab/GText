@@ -1,5 +1,6 @@
 # GText (Emoji, Hyperlink and Underline for UGUI)
 图文混排、超链接、下划线的UGUI解决方案
+[Github 地址](https://github.com/garsonlab/GText)
 
     支持：
     * 图集动态表情
@@ -11,18 +12,29 @@
 
 效果图：
 
-![](Screenshot1.gif)
+![](https://github.com/garsonlab/GText/raw/master/Screenshot1.gif)
 
 ```
 输入内容：
 New GText
-测试[AA]ceshi
-测试[AB|36#dianji]ceshi自定义大小且可点击表情
-测试[a|40#dianji]ceshi自定义大小且可点击动态表情
-测试[0x01##ff0000#ClickLink=HyperLink超链接]ceshi
-测试[0x02|30##00ffff#ClickImg=icons/1]ceshi显示自定义加载表情
-测试<material=u#00ff00>Underline下划线</material>ceshi
+测试1[AA]ceshi
+测试2[AB|36#dianji]ceshi自定义大小且可点击表情
+测试3[a|40#dianji]ceshi自定义大小且可点击动态表情
+测试4[0x01##ff0000#ClickLink=HyperLink超链接]ceshi
+测试5[0x02|30|30##00ffff#ClickImg=icons/1]ceshi显示自定义加载表情
+测试6<material=u#00ff00>Underline下划线</material>ceshi
 ```
+
+#### 更新 0.4
+* 1 更新占位符，使用 **< quad />** 代替 **\u2001**，表情大小可自定义控制
+* 2 表情大小控制方式 '|表情大小（可空，默认字体大小）’ 更改为 ‘|表情大小（可空，默认字体大小）|表情大小（可空，默认字体大小）’，更改后一个不填为字体大小，填一个效果等同于填两个相同值，即正方形；如上方 *测试5*
+* 3 精简 *TEXCOOR1* , 提升UI性能，更改后**不再需要父节点 Canvas 勾选 Additional Shader Channels 加入 Texcoord1**
+* 4 自定义加载表情 增加代理 *public delegate void EmojiFillHandler(Image img, string link);*
+* 5 优化正则匹配
+
+
+
+#### 关于解释
 
 1. 强行解释关于动态表情：
 
@@ -70,4 +82,9 @@ u标识underline, 坐等以后增加其他效果0.0
 更改GTexBuilder.cs中的emojiMat路径为上一步生成的材质球路径，
 在UI下右键UI/GText即可创建一个GText组件，创建和会默认更改父Canvas节点的Shader Channels
 
-![](Screenshot2.png)
+![](https://github.com/garsonlab/GText/raw/master/Screenshot2.png)
+
+
+### TODO
+* 优化下划线
+* 增加字体变色功能
