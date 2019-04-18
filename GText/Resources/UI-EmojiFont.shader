@@ -65,7 +65,6 @@ Shader "UI/EmojiFont" {
 				float4 vertex   : POSITION;
 				float4 color    : COLOR;
 				float2 texcoord : TEXCOORD0;
-				float2 texcoord1 : TEXCOORD1;
 			};
 
 			struct v2f
@@ -85,8 +84,8 @@ Shader "UI/EmojiFont" {
 				v2f OUT;
 				OUT.vertex = UnityObjectToClipPos(float4(IN.vertex.x, IN.vertex.y, IN.vertex.z, 1.0));
 
-				OUT.texcoord = IN.texcoord;
-				OUT.texcoord1 = IN.texcoord1;
+				OUT.texcoord1 = half2(floor(IN.texcoord.x*0.1), floor(IN.texcoord.y*0.1));
+				OUT.texcoord = IN.texcoord - OUT.texcoord1*10;
 				
 				#ifdef UNITY_HALF_TEXEL_OFFSET
 				OUT.vertex.xy += (_ScreenParams.zw-1.0) * float2(-1,1) * OUT.vertex.w;
