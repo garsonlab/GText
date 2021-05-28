@@ -1,8 +1,4 @@
-﻿/*
- * GText, Emoji and Hyper Link Solution for UGUI Text
- * by Garson
- */
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Text;
@@ -12,94 +8,218 @@ using UnityEngine.Events;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
-[RequireComponent(typeof(CanvasRenderer))]
+public enum FontType
+{
+    Fangzheng,
+    Minghei,
+}
+
 public class GText : Text, IPointerClickHandler
 {
-    static Dictionary<string, SpriteInfo> _emojiData;
-    readonly StringBuilder _builder = new StringBuilder();
-    readonly Dictionary<int, EmojiInfo> _emojis = new Dictionary<int, EmojiInfo>();
-    readonly List<HrefInfo> _hrefs = new List<HrefInfo>();
-    readonly List<Image> _images = new List<Image>();
-    readonly List<RectTransform> _rects = new List<RectTransform>();
-    readonly List<UnderlineInfo> _underlines = new List<UnderlineInfo>();
-    readonly UIVertex[] _tempVerts = new UIVertex[4];
-    readonly HrefClickEvent _hrefClickEvent = new HrefClickEvent();
-    readonly MatchResult _matchResult = new MatchResult();
-    static readonly string _regexTag = "\\[([0-9A-Za-z]+)((\\|[0-9]+){0,2})(##[0-9a-f]{6})?(#[^=\\]]+)?(=[^\\]]+)?\\]";
-    static readonly string _regexEffect = "<material=u(#[0-9a-f]{6})?>(((?!</material>).)*)</material>";
-    string _outputText = "";
-
-    /// <summary>0x02 Fill Image，(Image, link) </summary>
-    public Action<Image, string> EmojiFillHandler;
-    /// <summary>0x03 Custom Fill (RectTransform, link)</summary>
-    public Action<RectTransform, string> CustomFillHandler;
-    
-    /// <summary>Hyper Link Click Event</summary>
-    public HrefClickEvent hrefClick
+    private static Dictionary<string, EmojiData> m_EmojiData;
+    private static Dictionary<string, EmojiData> emojiDatas
     {
-        get { return _hrefClickEvent; }
+        get
+        {
+            if (m_EmojiData == null)
+            {
+                m_EmojiData = new Dictionary<string, EmojiData>();
+#if UNITY_EDITOR
+                var emojiContent = UnityEditor.AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Test/GText/output/emoji.txt").text;
+                string[] lines = emojiContent.Split('\n');
+                for (int i = 1; i < lines.Length; i++)
+                {
+                    if (!string.IsNullOrEmpty(lines[i]))
+                    {
+                        string[] strs = lines[i].Split('\t');
+                        EmojiData info = new EmojiData();
+                        info.frame = int.Parse(strs[1]);
+                        info.index = int.Parse(strs[2]);
+                        m_EmojiData.Add(strs[0], info);
+                    }
+                }
+#endif
+            }
+
+            return m_EmojiData;
+        }
     }
+    [SerializeField] private bool m_UseLocalization;
+    [SerializeField] private string m_LocalizationKey;
+    [SerializeField] private FontType m_FontType;
+    [SerializeField] private bool m_TiltEffect;
+    [SerializeField] private float m_TiltAngle;
+    private readonly UIVertex[] m_TempVerts = new UIVertex[4];
+    private readonly Vector3[] m_TempVecs = new Vector3[4];
+    private readonly List<BoxInfo> m_Boxs = new List<BoxInfo>();
+    private readonly Dictionary<int, SpriteInfo> m_Sprites = new Dictionary<int, SpriteInfo>();
+    private readonly List<Image> m_Images = new List<Image>();
+    private readonly List<RectTransform> m_Rects = new List<RectTransform>();
+    private readonly List<TextureData> m_Clears = new List<TextureData>();
+    [SerializeField] private HrefClickEvent m_HrefClickEvent = new HrefClickEvent();
+    private static readonly Regex m_Regex = new Regex("<a\\s([^>]+)>([^<>]*)</a>");
+    private static readonly Regex m_Attribute = new Regex("([a-z]+)=([^\\s=]+)");
+
+    /// <summary>Fill Image (Image, url)</summary>
+    public Action<Image, string> spriteFillHandler;
+    /// <summary>Fill Custom (RectTransform, url)</summary>
+    public Action<RectTransform, string> customFillHandler;
+    /// <summary>Clear Custom (RectTransform, url)</summary>
+    public Action<RectTransform, string> customClearHandler;
+    
+#if UNITY_EDITOR
+    private FontType m_LastFontType;
+    private Font m_LastFont;
+    private bool m_LastUseLocalization;
+    private string m_LastLocalizationKey;
+#endif
+    
+    private string m_OutputText;
+    private MatchResult m_MatchResult;
+    private StringBuilder m_builder;
+
+    /// <summary>是否使用多语言</summary>
+    public bool useLocalization
+    {
+        get { return this.m_UseLocalization; }
+        set
+        {
+            if(this.m_UseLocalization == value)
+                return;
+
+            this.m_UseLocalization = value;
+            this.text = GTextUtils.I18n(this.m_LocalizationKey);
+            // this.SetVerticesDirty();
+            // this.SetLayoutDirty();
+        }
+    }
+    /// <summary>多语言Key</summary>
+    public string localizationKey
+    {
+        get { return this.m_LocalizationKey; }
+        set
+        {
+            if(this.m_LocalizationKey.Equals(value))
+                return;
+
+            this.m_LocalizationKey = value;
+
+            if (this.m_UseLocalization)
+            {
+                this.text = GTextUtils.I18n(value);
+                // this.SetVerticesDirty();
+                // this.SetLayoutDirty();
+            }
+        }
+    }
+    /// <summary>字体类型</summary>
+    public FontType fontType
+    {
+        get { return this.m_FontType; }
+        set
+        {
+            if(this.m_FontType == value)
+                return;
+
+            this.m_FontType = value;
+            #if UNITY_EDITOR
+            this.m_LastFontType = value;
+            #endif
+            this.CheckFont();
+        }
+    }
+    /// <summary>倾斜排列</summary>
+    public bool tiltEffect
+    {
+        get { return this.m_TiltEffect; }
+        set
+        {
+            if(this.m_TiltEffect == value)
+                return;
+            this.m_TiltEffect = value;
+            this.SetLayoutDirty();
+            this.SetVerticesDirty();
+        }
+    }
+    /// <summary>倾斜角度</summary>
+    public float tiltAngle
+    {
+        get { return this.m_TiltAngle; }
+        set
+        {
+            if(this.m_TiltAngle == value)
+                return;
+            this.m_TiltAngle = value;
+            if (this.m_TiltEffect)
+            {
+                this.SetLayoutDirty();
+                this.SetVerticesDirty();
+            }
+        }
+    }
+    
     public override float preferredWidth
     {
         get
         {
             var settings = GetGenerationSettings(Vector2.zero);
-            return cachedTextGeneratorForLayout.GetPreferredWidth(_outputText, settings) / pixelsPerUnit;
+            return cachedTextGeneratorForLayout.GetPreferredWidth(this.m_OutputText, settings) / pixelsPerUnit;
         }
     }
+    
     public override float preferredHeight
     {
         get
         {
             var settings = GetGenerationSettings(new Vector2(rectTransform.rect.size.x, 0.0f));
-            return cachedTextGeneratorForLayout.GetPreferredHeight(_outputText, settings) / pixelsPerUnit;
+            return cachedTextGeneratorForLayout.GetPreferredHeight(this.m_OutputText, settings) / pixelsPerUnit;
         }
     }
+
+    public override Material material
+    {
+        get
+        {
+            if (this.m_Material == null)
+            {
+                
+            }
+
+            return this.m_Material;
+        }
+        set { this.m_Material = value; }
+    }
+
     public override string text
     {
-        get { return m_Text; }
-
+        get
+        {
+            return this.m_Text;
+        }
         set
         {
-            ParseText(value);
+            this.Parse(value);
             base.text = value;
         }
     }
+    
+    public HrefClickEvent hrefClick
+    {
+        get { return this.m_HrefClickEvent; }
+    }
 
+    
     protected override void Awake()
     {
         base.Awake();
-
-        // only run in playing mode
-        if(!Application.isPlaying)
-            return;
-
-        // load data
-        if (_emojiData == null)
-        {
-            _emojiData = new Dictionary<string, SpriteInfo>();
-            string emojiContent = Resources.Load<TextAsset>("emoji").text;
-            string[] lines = emojiContent.Split('\n');
-            for (int i = 1; i < lines.Length; i++)
-            {
-                if (!string.IsNullOrEmpty(lines[i]))
-                {
-                    string[] strs = lines[i].Split('\t');
-                    SpriteInfo info = new SpriteInfo();
-                    info.frame = int.Parse(strs[1]);
-                    info.index = int.Parse(strs[2]);
-                    _emojiData.Add(strs[0], info);
-                }
-            }
-        }
+        this.CheckFont();
     }
-    
+
     protected override void OnPopulateMesh(VertexHelper toFill)
     {
         if (font == null)
             return;
-
-        ParseText(m_Text);
+        Parse(this.m_Text);
         
         // We don't care if we the font Texture changes while we are doing our Update.
         // The end result of cachedTextGenerator will be valid for this instance.
@@ -109,13 +229,12 @@ public class GText : Text, IPointerClickHandler
         Vector2 extents = rectTransform.rect.size;
 
         var settings = GetGenerationSettings(extents);
-        cachedTextGenerator.Populate(_outputText, settings);
+        cachedTextGenerator.PopulateWithErrors(this.m_OutputText, settings, gameObject);
 
         // Apply the offset to the vertices
         IList<UIVertex> verts = cachedTextGenerator.verts;
         float unitsPerPixel = 1 / pixelsPerUnit;
-        //Last 4 verts are always a new line... (\n)
-        int vertCount = verts.Count - 4;
+        int vertCount = verts.Count;
 
         // We have no verts to process just return (case 1037923)
         if (vertCount <= 0)
@@ -123,8 +242,7 @@ public class GText : Text, IPointerClickHandler
             toFill.Clear();
             return;
         }
-        
-        Vector3 repairVec = new Vector3(0, fontSize * 0.1f);
+
         Vector2 roundingOffset = new Vector2(verts[0].position.x, verts[0].position.y) * unitsPerPixel;
         roundingOffset = PixelAdjustPoint(roundingOffset) - roundingOffset;
         toFill.Clear();
@@ -133,271 +251,113 @@ public class GText : Text, IPointerClickHandler
             for (int i = 0; i < vertCount; ++i)
             {
                 int tempVertsIndex = i & 3;
-                _tempVerts[tempVertsIndex] = verts[i];
-                _tempVerts[tempVertsIndex].position *= unitsPerPixel;
-                _tempVerts[tempVertsIndex].position.x += roundingOffset.x;
-                _tempVerts[tempVertsIndex].position.y += roundingOffset.y;
+                m_TempVerts[tempVertsIndex] = verts[i];
+                m_TempVerts[tempVertsIndex].position *= unitsPerPixel;
+                m_TempVerts[tempVertsIndex].position.x += roundingOffset.x;
+                m_TempVerts[tempVertsIndex].position.y += roundingOffset.y;
                 if (tempVertsIndex == 3)
-                    toFill.AddUIVertexQuad(_tempVerts);
+                    toFill.AddUIVertexQuad(m_TempVerts);
             }
         }
         else
         {
+            Vector3 repairVec = new Vector3(0, fontSize * 0.1f);
             Vector2 uv = Vector2.zero;
+            float start = verts[0].position.y;
             for (int i = 0; i < vertCount; ++i)
             {
-                EmojiInfo info;
                 int index = i / 4;
                 int tempVertIndex = i & 3;
 
-                if (_emojis.TryGetValue(index, out info))
+                m_TempVerts[tempVertIndex] = verts[i];
+                if (this.m_Sprites.TryGetValue(index, out SpriteInfo info))
                 {
-                    _tempVerts[tempVertIndex] = verts[i];
-                    _tempVerts[tempVertIndex].position -= repairVec;
+                    m_TempVerts[tempVertIndex].position -= repairVec;
                     if (info.type == MatchType.Emoji)
                     {
-                        uv.x = info.sprite.index;
-                        uv.y = info.sprite.frame;
-                        _tempVerts[tempVertIndex].uv0 += uv * 10;
+                        uv.x = info.emoji.index;
+                        uv.y = info.emoji.frame;
+                        m_TempVerts[tempVertIndex].uv0 += uv * 10;
                     }
                     else
                     {
                         if (tempVertIndex == 3)
-                            info.texture.position = _tempVerts[tempVertIndex].position;
-                        _tempVerts[tempVertIndex].position = _tempVerts[0].position;
+                            info.texture.position = m_TempVerts[tempVertIndex].position;
+                        m_TempVerts[tempVertIndex].position = m_TempVerts[0].position;
                     }
-
-                    _tempVerts[tempVertIndex].position *= unitsPerPixel;
-                    if (tempVertIndex == 3)
-                        toFill.AddUIVertexQuad(_tempVerts);
                 }
-                else
+                
+                m_TempVerts[tempVertIndex].position *= unitsPerPixel;
+                if (tempVertIndex == 3)
                 {
-                    _tempVerts[tempVertIndex] = verts[i];
-                    _tempVerts[tempVertIndex].position *= unitsPerPixel;
-                    if (tempVertIndex == 3)
-                        toFill.AddUIVertexQuad(_tempVerts);
+                    if (this.m_TiltEffect)
+                    {
+                        float offset = Mathf.Tan(this.m_TiltAngle * Mathf.Deg2Rad) * (this.m_TempVerts[0].position.y-start);
+                        for (int j = 0; j < 4; j++)
+                        {
+                            this.m_TempVerts[j].position.x += offset;
+                        }
+                    }
+                    toFill.AddUIVertexQuad(this.m_TempVerts);
                 }
             }
-            ComputeBoundsInfo(toFill);
+            
+            ComputeBounds(toFill);
             DrawUnderLine(toFill);
         }
 
         m_DisableFontTextureRebuiltCallback = false;
-
+        
         StartCoroutine(ShowImages());
     }
 
-    void ParseText(string mText)
+    void ComputeBounds(VertexHelper toFill)
     {
-        if (_emojiData == null || !Application.isPlaying)
-        {
-            _outputText = mText;
+        if(this.m_Boxs.Count <= 0)
             return;
-        }
 
-        _builder.Length = 0;
-        _emojis.Clear();
-        _hrefs.Clear();
-        _underlines.Clear();
-        ClearImages();
-
-        MatchCollection matches = Regex.Matches(mText, _regexTag);
-        if (matches.Count > 0)
-        {
-            int textIndex = 0;
-            int imgIdx = 0;
-            int rectIdx = 0;
-            for (int i = 0; i < matches.Count; i++)
-            {
-                var match = matches[i];
-                _matchResult.Parse(match, fontSize);
-
-                switch (_matchResult.type)
-                {
-                    case MatchType.Emoji:
-                    {
-                        SpriteInfo info;
-                        if (_emojiData.TryGetValue(_matchResult.title, out info))
-                        {
-                            _builder.Append(mText.Substring(textIndex, match.Index - textIndex));
-                            int temIndex = _builder.Length;
-
-                            _builder.Append("<quad size=");
-                            _builder.Append(_matchResult.height);
-                            _builder.Append(" width=");
-                            _builder.Append((_matchResult.width * 1.0f / _matchResult.height).ToString("f2"));
-                            _builder.Append(" />");
-
-                            _emojis.Add(temIndex, new EmojiInfo()
-                            {
-                                type = MatchType.Emoji,
-                                sprite = info,
-                                width = _matchResult.width,
-                                height = _matchResult.height
-                            });
-
-                            if (_matchResult.hasUrl)
-                            {
-                                var hrefInfo = new HrefInfo()
-                                {
-                                    show = false,
-                                    startIndex = temIndex * 4,
-                                    endIndex = temIndex * 4 + 3,
-                                    url = _matchResult.url,
-                                    color = _matchResult.GetColor(color)
-                                };
-                                _hrefs.Add(hrefInfo);
-                            }
-
-                            textIndex = match.Index + match.Length;
-                        }
-                        break;
-                    }
-                    case MatchType.HyperLink:
-                    {
-                        _builder.Append(mText.Substring(textIndex, match.Index - textIndex));
-                        _builder.Append("<color=");
-                        _builder.Append(_matchResult.GetHexColor(color));
-                        _builder.Append(">");
-                            
-                        var href = new HrefInfo();
-                        href.show = true;
-                        href.startIndex = _builder.Length * 4;
-                        _builder.Append(_matchResult.link);
-                        href.endIndex = _builder.Length * 4 - 1;
-                        href.url = _matchResult.url;
-                        href.color = _matchResult.GetColor(color);
-
-                        _hrefs.Add(href);
-                        _underlines.Add(href);
-                        _builder.Append("</color>");
-
-                        textIndex = match.Index + match.Length;
-                        break;
-                    }
-                    case MatchType.CustomFill:
-                    case MatchType.Texture:
-                    {
-                        _builder.Append(mText.Substring(textIndex, match.Index - textIndex));
-
-                        int temIndex = _builder.Length;
-
-                        _builder.Append("<quad size=");
-                        _builder.Append(_matchResult.height);
-                        _builder.Append(" width=");
-                        _builder.Append((_matchResult.width * 1.0f / _matchResult.height).ToString("f2"));
-                        _builder.Append(" />");
-                        
-                        _emojis.Add(temIndex, new EmojiInfo()
-                        {
-                            type = _matchResult.type,
-                            width = _matchResult.width,
-                            height = _matchResult.height,
-                            texture = new TextureInfo() {link = _matchResult.link, index = _matchResult.type == MatchType.Texture? imgIdx++ : rectIdx++}
-                        });
-                        if (_matchResult.hasUrl)
-                        {
-                            var hrefInfo = new HrefInfo()
-                            {
-                                show = false,
-                                startIndex = temIndex * 4,
-                                endIndex = temIndex * 4 + 3,
-                                url = _matchResult.url,
-                                color = _matchResult.GetColor(color)
-                            };
-
-                            _hrefs.Add(hrefInfo);
-                            //_underlines.Add(hrefInfo);
-                        }
-                        
-                        textIndex = match.Index + match.Length;
-                        break;
-                    }
-                }
-            }
-            _builder.Append(mText.Substring(textIndex, mText.Length - textIndex));
-            _outputText = _builder.ToString();
-        }
-        else
-            _outputText = mText;
-
-        matches = Regex.Matches(_outputText, _regexEffect);
-        for (int i = 0; i < matches.Count; i++)
-        {
-            var match = matches[i];
-            if (match.Success && match.Groups.Count == 4)
-            {
-                string v1 = match.Groups[1].Value;
-                Color lineColor;
-                if(!string.IsNullOrEmpty(v1) && ColorUtility.TryParseHtmlString(v1, out lineColor)){ }
-                else lineColor = color;
-
-                var underline = new UnderlineInfo()
-                {
-                    show = true,
-                    startIndex = match.Groups[2].Index * 4,
-                    endIndex = match.Groups[2].Index * 4 + match.Groups[2].Length * 4 - 1,
-                    color = lineColor
-                };
-                _underlines.Add(underline);
-            }
-        }
-    }
-
-    void ComputeBoundsInfo(VertexHelper toFill)
-    {
+        int vertCount = toFill.currentVertCount;
         UIVertex vert = new UIVertex();
-        for (int u = 0; u < _underlines.Count; u++)
+        for (int b = 0; b < this.m_Boxs.Count; b++)
         {
-            var underline = _underlines[u];
-            underline.boxes.Clear();
-            if (underline.startIndex >= toFill.currentVertCount)
+            var boxInfo = this.m_Boxs[b];
+            if (boxInfo.startIndex >= vertCount)
                 continue;
-
-            // Add hyper text vector index to bounds
-            toFill.PopulateUIVertex(ref vert, underline.startIndex);
+            
+            toFill.PopulateUIVertex(ref vert, boxInfo.startIndex);
             var pos = vert.position;
             var bounds = new Bounds(pos, Vector3.zero);
-            for (int i = underline.startIndex, m = underline.endIndex; i < m; i++)
+            for (int i = boxInfo.startIndex; i < boxInfo.endIndex; i++)
             {
-                if (i >= toFill.currentVertCount) break;
-
+                if(i >= vertCount) break;
+                
                 toFill.PopulateUIVertex(ref vert, i);
-                pos = vert.position;
-                if (pos.x < bounds.min.x)
+                if (i % 4 == 0 && Mathf.Abs(vert.position.y - pos.y) > fontSize * 0.5f)
                 {
-                    //if in different lines
-                    underline.boxes.Add(new Rect(bounds.min, bounds.size));
+                    boxInfo.boxes.Add(new Rect(bounds.min, bounds.size));
+                    pos = vert.position;
                     bounds = new Bounds(pos, Vector3.zero);
                 }
                 else
                 {
-                    bounds.Encapsulate(pos); //expand bounds
+                    bounds.Encapsulate(vert.position);
                 }
-
             }
-            //add bound
-            underline.boxes.Add(new Rect(bounds.min, bounds.size));
+            boxInfo.boxes.Add(new Rect(bounds.min, bounds.size));
         }
+        
     }
-
     void DrawUnderLine(VertexHelper toFill)
     {
-        if(_underlines.Count <= 0)
+        if(this.m_Boxs.Count <= 0 || cachedTextGenerator.lineCount <= 0)
             return;
 
-        Vector2 extents = rectTransform.rect.size;
-        var settings = GetGenerationSettings(extents);
-        cachedTextGenerator.Populate("_", settings);
-        IList<UIVertex> uList = cachedTextGenerator.verts;
-        float h = uList[2].position.y - uList[1].position.y;
-        Vector3[] temVecs = new Vector3[4];
+        float h = cachedTextGenerator.lines[0].height * 0.1f;//this.m_BoxInfo[0].boxes[0].height * 0.1f;
         
-        for (int i = 0; i < _underlines.Count; i++)
+        for (int i = 0; i < this.m_Boxs.Count; i++)
         {
-            var info = _underlines[i];
-            if(!info.show)
+            var info = this.m_Boxs[i];
+            if(!info.showLine)
                 continue;
 
             for (int j = 0; j < info.boxes.Count; j++)
@@ -405,296 +365,525 @@ public class GText : Text, IPointerClickHandler
                 if (info.boxes[j].width <= 0 || info.boxes[j].height <= 0)
                     continue;
 
-                temVecs[0] = info.boxes[j].min;
-                temVecs[1] = temVecs[0] + new Vector3(info.boxes[j].width, 0);
-                temVecs[2] = temVecs[0] + new Vector3(info.boxes[j].width, -h);
-                temVecs[3] = temVecs[0] + new Vector3(0, -h);
+                this.m_TempVecs[0] = info.boxes[j].min + new Vector2(0, h*info.linePos);
+                this.m_TempVecs[1] = this.m_TempVecs[0] + new Vector3(info.boxes[j].width, 0);
+                this.m_TempVecs[2] = this.m_TempVecs[0] + new Vector3(info.boxes[j].width, -h);
+                this.m_TempVecs[3] = this.m_TempVecs[0] + new Vector3(0, -h);
 
                 for (int k = 0; k < 4; k++)
                 {
-                    _tempVerts[k] = uList[k];
-                    _tempVerts[k].color = info.color;
-                    _tempVerts[k].position = temVecs[k];
+                    this.m_TempVerts[k] = UIVertex.simpleVert;
+                    this.m_TempVerts[k].color = info.color;
+                    this.m_TempVerts[k].position = this.m_TempVecs[k];
+                    this.m_TempVerts[k].uv0 = Vector2.down;
                 }
 
-                toFill.AddUIVertexQuad(_tempVerts);
+                toFill.AddUIVertexQuad(this.m_TempVerts);
             }
         }
 
     }
+    
+    private void CheckFont()
+    {
+        var myFont = GTextUtils.GetFont(this.m_FontType);
+        if (myFont != this.font)
+        {
+            this.font = myFont;
+        }
+    }
+
+    private StringBuilder CacheBuilder()
+    {
+        if(this.m_builder == null)
+            this.m_builder = new StringBuilder(this.m_Text.Length+30);
+        if (this.m_builder.Capacity < this.m_Text.Length)
+            this.m_builder.Capacity = this.m_Text.Length + 30;
+        this.m_builder.Clear();
+        return this.m_builder;
+    }
+    
+    private void Parse(string mText)
+    {
+        this.m_Boxs.Clear();
+        this.m_Sprites.Clear();
+        ClearImages();
+        
+        var matchs = m_Regex.Matches(mText);
+        if (matchs.Count <= 0)
+        {
+            this.m_OutputText = mText;
+            return;
+        }
+
+        var builder = this.CacheBuilder();
+        int textIndex = 0, imgIdx = 0, rectIdx = 0;
+        foreach (Match match in matchs)
+        {
+            this.m_MatchResult.Parse(match, fontSize, color);
+            
+                switch (this.m_MatchResult.type)
+                {
+                    case MatchType.Emoji:
+                    {
+                        if (emojiDatas.TryGetValue(this.m_MatchResult.title, out EmojiData data))
+                        {
+                            builder.Append(mText.Substring(textIndex, match.Index - textIndex));
+                            int temIndex = builder.Length;
+
+                            builder.Append("<quad size=");
+                            builder.Append(this.m_MatchResult.height);
+                            builder.Append(" width=");
+                            builder.Append((this.m_MatchResult.width * 1.0f / this.m_MatchResult.height).ToString("f2"));
+                            builder.Append(" />");
+
+                            var info = SpriteInfo.ParseEmoji(this.m_MatchResult, data);
+                            this.m_Sprites.Add(temIndex, info);
+
+                            if (this.m_MatchResult.isLink || this.m_MatchResult.underline)
+                            {
+                                var box = new BoxInfo(this.m_MatchResult);
+                                box.startIndex = temIndex * 4;
+                                box.endIndex = temIndex * 4 + 3;
+                                
+                                this.m_Boxs.Add(box);
+                            }
+
+                            textIndex = match.Index + match.Length;
+                        }
+                        break;
+                    }
+                    case MatchType.None:
+                    case MatchType.HyperLink:
+                    {
+                        if (this.m_MatchResult.type == MatchType.None && !this.m_MatchResult.underline)
+                        {
+                            Debug.LogWarning($"{match.Value} type:None underline:false");
+                        }
+                        else
+                        {
+                            builder.Append(mText.Substring(textIndex, match.Index - textIndex));
+                            builder.Append("<color=");
+                            builder.Append(this.m_MatchResult.hexColor);
+                            builder.Append(">");
+
+                            var info = new BoxInfo(this.m_MatchResult);
+                            info.startIndex = builder.Length * 4;
+                            builder.Append(this.m_MatchResult.title);
+                            info.endIndex = builder.Length * 4 - 1;
+
+                            this.m_Boxs.Add(info);
+                            builder.Append("</color>");
+
+                            textIndex = match.Index + match.Length;
+                        }
+                        break;
+                    }
+                    case MatchType.Custom:
+                    case MatchType.Texture:
+                    {
+                        builder.Append(mText.Substring(textIndex, match.Index - textIndex));
+
+                        int temIndex = builder.Length;
+
+                        builder.Append("<quad size=");
+                        builder.Append(m_MatchResult.height);
+                        builder.Append(" width=");
+                        builder.Append((m_MatchResult.width * 1.0f / m_MatchResult.height).ToString("f2"));
+                        builder.Append(" />");
+
+                        var info = SpriteInfo.ParseTexture(this.m_MatchResult, this.m_MatchResult.type == MatchType.Texture ? imgIdx++: rectIdx++);
+                        m_Sprites.Add(temIndex, info);
+
+                        if (this.m_MatchResult.isLink || this.m_MatchResult.underline)
+                        {
+                            var box = new BoxInfo(this.m_MatchResult);
+                            box.startIndex = temIndex * 4;
+                            box.endIndex = temIndex * 4 + 3;
+                                
+                            this.m_Boxs.Add(box);
+                        }
+                        
+                        textIndex = match.Index + match.Length;
+                        break;
+                    }
+                }
+        }
+        
+        builder.Append(mText.Substring(textIndex));
+        this.m_OutputText = builder.ToString();
+    }
 
     void IPointerClickHandler.OnPointerClick(PointerEventData eventData)
     {
-        Vector2 lp;
         RectTransformUtility.ScreenPointToLocalPointInRectangle(
-            rectTransform, eventData.position, eventData.pressEventCamera, out lp);
+            rectTransform, eventData.position, eventData.pressEventCamera, out Vector2 lp);
 
-        for (int h = 0; h < _hrefs.Count; h++)
+        for (int h = 0; h < this.m_Boxs.Count; h++)
         {
-            var hrefInfo = _hrefs[h];
+            var hrefInfo = this.m_Boxs[h];
+            if(!hrefInfo.isLink) continue;
             var boxes = hrefInfo.boxes;
             for (var i = 0; i < boxes.Count; ++i)
             {
                 if (boxes[i].Contains(lp))
                 {
-                    _hrefClickEvent.Invoke(hrefInfo.url);
+                    this.m_HrefClickEvent.Invoke(hrefInfo.link);
                     return;
                 }
             }
         }
     }
-
+    
     void ClearImages()
     {
-        for (int i = 0; i < _images.Count; i++)
+        foreach (var emoji in this.m_Sprites.Values)
         {
-            _images[i].rectTransform.localScale = Vector3.zero;
+            if (emoji.type == MatchType.Custom)
+                this.m_Clears.Add(emoji.texture);
+        }
+        
+        for (int i = 0; i < m_Images.Count; i++)
+        {
+            m_Images[i].rectTransform.localScale = Vector3.zero;
+            m_Images[i].sprite = null;
         }
 
-        for (int i = 0; i < _rects.Count; i++)
+        for (int i = 0; i < m_Rects.Count; i++)
         {
-            _rects[i].localScale = Vector3.zero;
+            m_Rects[i].localScale = Vector3.zero;
         }
     }
-
+    
     IEnumerator ShowImages()
     {
         yield return null;
-        foreach (var emojiInfo in _emojis.Values)
+        
+        if(!Application.isPlaying || !gameObject.activeInHierarchy)
+            yield break;
+
+        if (this.customClearHandler != null && this.m_Clears.Count > 0)
         {
-            if (emojiInfo.type == MatchType.Texture)
+            foreach (var data in this.m_Clears)
+                this.customClearHandler.Invoke(data.rect, data.url);
+        }
+        m_Clears.Clear();
+        
+        for (int i = 0; i < this.m_Sprites.Count; i++)
+        {
+            var spriteInfo = this.m_Sprites[i];
+            if (spriteInfo.type == MatchType.Texture)
             {
-                emojiInfo.texture.image = GetImage(emojiInfo.texture, emojiInfo.width, emojiInfo.height);
+                spriteInfo.texture.image = GetImage(spriteInfo.texture, spriteInfo.width, spriteInfo.height);
                 
                 /* Test Data */
                 Debug.Log("测试数据，正式由下方EmojiFillHandler完成");
-                Sprite sprite = Resources.Load<Sprite>(emojiInfo.texture.link);
-                emojiInfo.texture.image.sprite = sprite;
+                Sprite sprite = Resources.Load<Sprite>(spriteInfo.texture.url);
+                spriteInfo.texture.image.sprite = sprite;
                 /* Test Data */
 
-                if (EmojiFillHandler != null)
-                    EmojiFillHandler(emojiInfo.texture.image, emojiInfo.texture.link);
+                this.spriteFillHandler?.Invoke(spriteInfo.texture.image, spriteInfo.texture.url);
             }
-            else if (emojiInfo.type == MatchType.CustomFill)
+            else if (spriteInfo.type == MatchType.Custom)
             {
-                emojiInfo.texture.rect = GetRectTransform(emojiInfo.texture, emojiInfo.width, emojiInfo.height);
+                spriteInfo.texture.rect = GetRectTransform(spriteInfo.texture, spriteInfo.width, spriteInfo.height);
 
                 /* Test Data */
                 Debug.Log("测试数据，正式由下方CustomFillHandler完成");
-                UnityEngine.Object prefab = Resources.Load(emojiInfo.texture.link);
+                UnityEngine.Object prefab = Resources.Load(spriteInfo.texture.url);
                 var obj = GameObject.Instantiate(prefab) as GameObject;
                 var objRect = obj.transform as RectTransform;
-                objRect.SetParent(emojiInfo.texture.rect);
+                objRect.SetParent(spriteInfo.texture.rect);
                 objRect.localScale = Vector3.one;
                 objRect.anchoredPosition = Vector2.zero;
                 /* Test Data */
 
-                if (CustomFillHandler != null)
-                    CustomFillHandler(emojiInfo.texture.rect, emojiInfo.texture.link);
+                this.customFillHandler?.Invoke(spriteInfo.texture.rect, spriteInfo.texture.url);
             }
         }
     }
 
-    Image GetImage(TextureInfo info, int width, int height)
+    Image GetImage(TextureData data, int width, int height)
     {
         Image img = null;
-        if (_images.Count > info.index)
-            img = _images[info.index];
+        if (this.m_Images.Count > data.index)
+            img = this.m_Images[data.index];
 
         if (img == null)
         {
-            GameObject obj = new GameObject("emoji_" + info.index);
+            GameObject obj = new GameObject("emoji_" + data.index);
             img = obj.AddComponent<Image>();
             obj.transform.SetParent(transform);
             img.rectTransform.pivot = Vector2.zero;
             img.raycastTarget = false;
 
-            if(_images.Count > info.index)
-                _images[info.index] = img;
+            if(this.m_Images.Count > data.index)
+                this.m_Images[data.index] = img;
             else
-                _images.Add(img);
+                this.m_Images.Add(img);
         }
 
         img.rectTransform.localScale = Vector3.one;
         img.rectTransform.sizeDelta = new Vector2(width, height);
-        img.rectTransform.anchoredPosition = info.position;
+        img.rectTransform.anchoredPosition = data.position;
         return img;
     }
 
-    RectTransform GetRectTransform(TextureInfo info, int width, int height)
+    RectTransform GetRectTransform(TextureData data, int width, int height)
     {
         RectTransform rect = null;
-        if (_rects.Count > info.index)
-            rect = _rects[info.index];
+        if (this.m_Rects.Count > data.index)
+            rect = this.m_Rects[data.index];
 
         if (rect == null)
         {
-            GameObject obj = new GameObject("custom_" + info.index);
+            GameObject obj = new GameObject("custom_" + data.index);
             rect = obj.AddComponent<RectTransform>();
             obj.transform.SetParent(transform);
             rect.pivot = Vector2.zero;
 
-            if (_rects.Count > info.index)
-                _rects[info.index] = rect;
+            if (this.m_Rects.Count > data.index)
+                this.m_Rects[data.index] = rect;
             else
-                _rects.Add(rect);
+                this.m_Rects.Add(rect);
         }
         rect.localScale = Vector3.one;
         rect.sizeDelta = new Vector2(width, height);
-        rect.anchoredPosition = info.position;
+        rect.anchoredPosition = data.position;
         return rect;
     }
-
-    [Serializable]
-    public class HrefClickEvent : UnityEvent<string> { }
-
-    class SpriteInfo
+    
+#if UNITY_EDITOR
+    
+    protected override void OnValidate()
     {
-        public int index;
-        public int frame;
+        if (this.m_LastUseLocalization && !this.m_LastLocalizationKey.Equals(this.m_LocalizationKey))
+        {
+            this.m_Text = GTextUtils.I18n(this.m_LocalizationKey);
+            this.m_LastLocalizationKey = this.m_LocalizationKey;
+        }
+        
+        if (this.m_LastUseLocalization != this.m_UseLocalization)
+        {
+            this.m_LastUseLocalization = this.m_UseLocalization;
+            if (this.m_UseLocalization)
+                this.m_Text = GTextUtils.I18n(this.m_LocalizationKey);
+        }
+        
+        if (this.m_LastFontType != this.m_FontType || this.m_LastFont != font)
+        {
+            this.CheckFont();
+            this.m_LastFontType = this.m_FontType;
+            this.m_LastFont = font;
+        }
+        base.OnValidate();
+    }
+    
+#endif
+
+    enum MatchType
+    {
+        None = 0,
+        Emoji = 1,
+        HyperLink = 2,
+        Texture = 4,
+        Custom = 8
+    }
+    
+    struct MatchResult
+    {
+        #region TYPE
+    
+        private const string EMOJI = "emoji";
+        private const string LINK = "link";
+        private const string TEXTURE = "trxture";
+        private const string CUSTOM = "custom";
+        
+        #endregion
+        
+        #region ATTRIBUTE
+        
+        private const string TYPE = "type";//link, emoji, texture
+        private const string COLOR = "color";
+        private const string HREF = "href";
+        private const string WIDTH = "width";
+        private const string HEIGHT = "height";
+        private const string URL = "url";
+        private const string UNDERLINE = "underline";
+
+        private const int TITLEINDEX = 1;
+        private const int ATTRIBUTEINDEX = 2;
+        
+        #endregion
+        
+        public MatchType type;
+        public string title;
+        public string url;
+        public int width;
+        public int height;
+        public string hexColor;
+        public Color color;
+        public bool isLink;
+        public string link;
+        public bool underline;
+        public int underlinePos;
+
+        void Reset()
+        {
+            this.type = MatchType.None;
+            this.title = String.Empty;
+            this.url = String.Empty;
+            this.width = 0;
+            this.height = 0;
+            this.hexColor = String.Empty;
+            this.color = Color.clear;
+            this.link = String.Empty;
+            this.isLink = false;
+            this.underline = false;
+            this.underlinePos = 1;
+        }
+        
+        public void Parse(Match match, int size, Color color)
+        {
+            this.Reset();
+            this.color = color;
+            this.title = match.Groups[ATTRIBUTEINDEX].Value;
+            var attrs = m_Attribute.Matches(match.Groups[TITLEINDEX].Value);
+            foreach (Match attr in attrs)
+            {
+                switch (attr.Groups[TITLEINDEX].Value)
+                {
+                    case TYPE:
+                        switch (attr.Groups[ATTRIBUTEINDEX].Value)
+                        {
+                            case EMOJI:
+                                this.type = MatchType.Emoji;
+                                break;
+                            case LINK:
+                                this.type = MatchType.HyperLink;
+                                break;
+                            case TEXTURE:
+                                this.type = MatchType.Texture;
+                                break;
+                            case CUSTOM:
+                                this.type = MatchType.Custom;
+                                break;
+                        }
+                        break;
+                    case COLOR:
+                        this.hexColor = attr.Groups[ATTRIBUTEINDEX].Value;
+                        ColorUtility.TryParseHtmlString(attr.Groups[ATTRIBUTEINDEX].Value, out this.color);
+                        break;
+                    case HREF:
+                        this.link = attr.Groups[ATTRIBUTEINDEX].Value;
+                        this.isLink = true;
+                        break;
+                    case WIDTH:
+                        int.TryParse(attr.Groups[ATTRIBUTEINDEX].Value, out this.width);
+                        break;
+                    case HEIGHT:
+                        int.TryParse(attr.Groups[ATTRIBUTEINDEX].Value, out this.height);
+                        break;
+                    case URL:
+                        this.url = attr.Groups[ATTRIBUTEINDEX].Value;
+                        break;
+                    case UNDERLINE:
+                        this.underline = true;
+                        if (int.TryParse(attr.Groups[ATTRIBUTEINDEX].Value, out this.underlinePos))
+                            this.underlinePos = Mathf.Clamp(this.underlinePos, 0, 9);
+                        else
+                            this.underlinePos = 1;
+                        break;
+                }
+            }
+
+            if (this.isLink && this.type == MatchType.None)
+                this.type = MatchType.HyperLink;
+
+            if (this.height <= 0)
+                this.height = size;
+            if (this.width <= 0)
+                this.width = this.height;
+        }
+
+    }
+    
+    struct BoxInfo
+    {
+        public bool showLine;
+        public bool isLink;
+        public int startIndex;
+        public int endIndex;
+        public int linePos;
+        public string link;
+        public Color color;
+        public List<Rect> boxes;
+
+        public BoxInfo(MatchResult result)
+        {
+            this.showLine = result.underline;
+            this.isLink = result.isLink;
+            this.startIndex = 0;
+            this.endIndex = 0;
+            this.linePos = result.underlinePos;
+            this.link = result.link;
+            this.color = result.color;
+            this.boxes = new List<Rect>();
+        }
     }
 
-    class TextureInfo
+    struct TextureData
     {
         public int index;
         public Image image;
         public RectTransform rect;
         public Vector3 position;
-        public string link;
-    }
-
-    class EmojiInfo
-    {
-        public MatchType type;
-        public int width;
-        public int height;
-        public SpriteInfo sprite;
-        public TextureInfo texture;
+        public string url;
     }
     
-    enum MatchType
-    {
-        None,
-        Emoji,
-        HyperLink,
-        Texture,
-        CustomFill,
-    }
-
-    class MatchResult
+    struct SpriteInfo
     {
         public MatchType type;
-        public string title;
-        public string url;
-        public string link;
-        public int height;
         public int width;
-        private string color;
-        private Color _color;
-        public bool hasUrl
+        public int height;
+        public EmojiData emoji;
+        public TextureData texture;
+
+        private static SpriteInfo Parse(MatchResult result)
         {
-            get { return !string.IsNullOrEmpty(url); }
+            var info = new SpriteInfo();
+            info.type = result.type;
+            info.width = result.width;
+            info.height = result.height;
+            return info;
         }
 
-        void Reset()
+        public static SpriteInfo ParseEmoji(MatchResult result, EmojiData emoji)
         {
-            type = MatchType.None;
-            title = String.Empty;
-            width = 0;
-            height = 0;
-            color = string.Empty;
-            url = string.Empty;
-            link = string.Empty;
-        }
-        
-        public void Parse(Match match, int fontSize)
-        {
-            Reset();
-            if(!match.Success || match.Groups.Count != 7)
-                return;
-            title = match.Groups[1].Value;
-            if (match.Groups[2].Success)
-            {
-                string v = match.Groups[2].Value;
-                string[] sp = v.Split('|');
-                height = sp.Length > 1 ? int.Parse(sp[1]) : fontSize;
-                width = sp.Length == 3 ? int.Parse(sp[2]) : height;
-            }
-            else
-            {
-                height = fontSize;
-                width = fontSize;
-            }
-
-            if (match.Groups[4].Success)
-            {
-                color = match.Groups[4].Value.Substring(1);
-            }
-
-            if (match.Groups[5].Success)
-            {
-                url = match.Groups[5].Value.Substring(1);
-            }
-
-            if (match.Groups[6].Success)
-            {
-                link = match.Groups[6].Value.Substring(1);
-            }
-
-            if (title.Equals("0x01")) //hyper link
-            {
-                if (!string.IsNullOrEmpty(url) && !string.IsNullOrEmpty(link))
-                {
-                    type = MatchType.HyperLink;
-                }
-            }
-            else if (title.Equals("0x02"))
-            {
-                if (!string.IsNullOrEmpty(link))
-                {
-                    type = MatchType.Texture;
-                }
-            }
-            else if (title.Equals("0x03"))
-            {
-                if (!string.IsNullOrEmpty(link))
-                {
-                    type = MatchType.CustomFill;
-                }
-            }
-
-            if (type == MatchType.None)
-                type = MatchType.Emoji;
+            var info = Parse(result);
+            info.type = MatchType.Emoji;
+            info.emoji = emoji;
+            return info;
         }
 
-        public Color GetColor(Color fontColor)
+        public static SpriteInfo ParseTexture(MatchResult result, int idx)
         {
-            if (string.IsNullOrEmpty(color))
-                return fontColor;
-            ColorUtility.TryParseHtmlString(color, out _color);
-            return _color;
-        }
-
-        public string GetHexColor(Color fontColor)
-        {
-            if (!string.IsNullOrEmpty(color))
-                return color;
-            return ColorUtility.ToHtmlStringRGBA(fontColor);
+            var info = Parse(result);
+            info.texture = new TextureData()
+            {
+                url = result.url,
+                index = idx
+            };
+            return info;
         }
     }
 
-    class UnderlineInfo
+    class EmojiData
     {
-        public bool show;
-        public int startIndex;
-        public int endIndex;
-        public Color color;
-        public readonly List<Rect> boxes = new List<Rect>();
+        public int index;
+        public int frame;
     }
-
-    class HrefInfo : UnderlineInfo
-    {
-        public string url;
-    }
-
+    
+    [Serializable]
+    public class HrefClickEvent : UnityEvent<string> { }
 }
